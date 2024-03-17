@@ -33,14 +33,14 @@ int isdigit( int ch );
 UErrorCode err=U_ZERO_ERROR , idc=U_ZERO_ERROR;
 
 
-const int attribute_red_background = 41;
-const int attribute_green_background=42;
-const int attribute_yellow_background=43;
-const int attribute_blue_background=44;
-const int attribute_magenta_background=45;
-const int attribute_light_gray_background=47;
-const int attribute_default_background=49;
-const int attribute_bright_blue_background = 104;
+static const int attribute_red_background = 41;
+static const int attribute_green_background=42;
+static const int attribute_yellow_background=43;
+static const int attribute_blue_background=44;
+static const int attribute_magenta_background=45;
+static const int attribute_light_gray_background=47;
+static const int attribute_default_background=49;
+static const int attribute_bright_blue_background = 104;
 const UChar32 * find_predicate_in_string(const UChar32 * str, UBool (*predicate)(UChar32), size_t length ){
     for (size_t i=0; i<length; i++)
         if (predicate(str[i])) return &str[i];

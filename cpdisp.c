@@ -65,7 +65,7 @@ static void attrPrintMessage(int attribute, const char * message){
     char message_index_string[3] =
         {'A'+(message_index/16),'A'+(message_index%16),'\0'};
     attrPrint(attribute, message_index_string);
-    const size_t formatted_message_size=16+strlen(message);
+    const size_t formatted_message_size=17+strlen(message);
     char * message_formatted=malloc(formatted_message_size);
     snprintf(message_formatted,formatted_message_size,"\e[%dm%s: %s\e[49m\n",
         attribute, 
@@ -204,7 +204,7 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
             break;
 
             case 'h':
-            printf(helptext);
+            printf("%s",helptext);
             config.help=true;
             return config;
 

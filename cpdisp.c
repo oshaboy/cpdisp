@@ -77,7 +77,7 @@ static void attrPrintRaw(int attribute, unsigned char raw){
 	sprintf(buf,"%02hhx",raw);
 	attrPrint(attribute, buf);
 }
-void attrPrintCodepointAsHex(int attribute, const UChar32 codepoint){
+static void attrPrintCodepointAsHex(int attribute, const UChar32 codepoint){
 	if (codepoint < 0x100){
 		attrPrintRaw(attribute, (unsigned char)codepoint);
 	} else {
@@ -418,5 +418,5 @@ int main(int argc, char * argv[]){
 		ucnv_close(config.converter);
 	}
 	free(inbuf);
-    return 0;
+    return return_code;
 }

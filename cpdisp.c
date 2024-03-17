@@ -32,6 +32,15 @@ int isdigit( int ch );
 
 UErrorCode err=U_ZERO_ERROR , idc=U_ZERO_ERROR;
 
+
+const int attribute_red_background = 41;
+const int attribute_green_background=42;
+const int attribute_yellow_background=43;
+const int attribute_blue_background=44;
+const int attribute_magenta_background=45;
+const int attribute_light_gray_background=47;
+const int attribute_default_background=49;
+const int attribute_bright_blue_background = 104;
 const UChar32 * find_predicate_in_string(const UChar32 * str, UBool (*predicate)(UChar32), size_t length ){
     for (size_t i=0; i<length; i++)
         if (predicate(str[i])) return &str[i];
@@ -57,7 +66,7 @@ static void attrPrintMessage(int attribute, const char * message){
 	attrPrint(attribute, message_index_string);
 	const size_t formatted_message_size=16+strlen(message);
 	char * message_formatted=malloc(formatted_message_size);
-	snprintf(message_formatted,formatted_message_size,"\e[%dm%s: %s\e[0m\n",
+	snprintf(message_formatted,formatted_message_size,"\e[%dm%s: %s\e[49m\n",
 		attribute, 
 		message_index_string,
 		message
@@ -330,11 +339,11 @@ void print_fonttest(const Config * config_ptr, inbuf_type * inbuf){
 					err==U_ILLEGAL_ESCAPE_SEQUENCE ||
 					err==U_UNSUPPORTED_ESCAPE_SEQUENCE || 
 					!u_isdefined(*str_utf32)) 
-					format attrPrintSpace(41);
+					format attrPrintSpace(attribute_red_background);
 				else if (err==U_TRUNCATED_CHAR_FOUND)
-					format attrPrintSpace(42);
+					format attrPrintSpace(attribute_green_background);
 				else if (U_FAILURE(err) ) 
-					format attrPrintMessage(43,u_errorName(err));
+					format attrPrintMessage(attribute_yellow_background,u_errorName(err));
 				else {
 					const UChar32 *tmp;
 					if(
@@ -342,9 +351,9 @@ void print_fonttest(const Config * config_ptr, inbuf_type * inbuf){
 						(tmp=find_predicate_in_string(str_utf32,u_iscntrl,lengths.length_utf32))
 					){
 						if (config.verbose_control_codes_and_whitespace)
-							format attrPrintCodepointAsHex(104, *tmp);
+							format attrPrintCodepointAsHex(attribute_bright_blue_background, *tmp);
 						else 
-							format attrPrintSpace(44);
+							format attrPrintSpace(attribute_blue_background);
 					}
 					else if(
 						!config.control_codes_raw && 
@@ -352,7 +361,7 @@ void print_fonttest(const Config * config_ptr, inbuf_type * inbuf){
 						(tmp=find_predicate_in_string(str_utf32, u_isUWhiteSpace, lengths.length_utf32)) && 
 						(*tmp != ' ')
 					)
-						format attrPrintCodepointAsHex(47, *tmp);
+						format attrPrintCodepointAsHex(attribute_light_gray_background, *tmp);
 					else {
 						char out_buf_utf8[33];
 							
@@ -372,7 +381,7 @@ void print_fonttest(const Config * config_ptr, inbuf_type * inbuf){
 						if (!config.no_format_bool) {
 							UBool isPUA=(find_predicate_in_string(str_utf32,u_isPUA, lengths.length_utf32)!=NULL);
 							const UCharDirection direction = u_charDirection(*str_utf32);
-							attrPrint(isPUA?45:49, out_buf_utf8);
+							attrPrint(isPUA?attribute_magenta_background:attribute_default_background, out_buf_utf8);
 						}
 						else 
 							printf("%s", out_buf_utf8);

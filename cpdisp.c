@@ -129,7 +129,7 @@ typedef struct {
 } inbuf_type;
 typedef struct {
     UConverter * converter;
-    int from_table, to_table;
+    uint8_t from_table, to_table;
     bool interactive : 1;
     bool no_format_bool : 1;
     bool control_codes_raw : 1;
@@ -144,8 +144,6 @@ typedef struct {
 Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
     Config config={
         .no_format_bool=false,
-        .from_table=0,
-        .to_table=255,
         .interactive=false,
         .wide=false,
         .fail=false,
@@ -155,16 +153,17 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
     };
     int opt;
     char * dat_filename=NULL;
+    int from_table=0, to_table=255;
     while ((opt=getopt(argc, argv, optstring))!=-1){
         switch (opt){
             case 'r':{
             if (isdigit(*optarg))
-                config.from_table=atoi(optarg);
+                from_table=atoi(optarg);
             const char * to_table_str=strchr(optarg, ':');
             if (to_table_str == NULL)
-                config.to_table=config.from_table;
+                to_table=from_table;
             else if (isdigit(*(to_table_str+1)))
-                config.to_table=atoi(to_table_str+1);
+                to_table=atoi(to_table_str+1);
             } break;
 
             case 'i':
@@ -225,21 +224,23 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
         return config;
     }
     if (!config.wide){
-        config.to_table=config.from_table=0;
+        to_table=from_table=0;
         config.interactive=false;
     }
     if (
-        config.from_table >= 256 || config.to_table >= 256 ||
-        config.from_table < 0 || config.to_table < 0
+        from_table >= 256 || to_table >= 256 ||
+        from_table < 0 || to_table < 0
     ){
         fprintf(stderr,"Table index must be between 0 and 255\n");
         config.fail=true;
         return config;
-    } else if (config.to_table < config.from_table){
+    } else if (to_table < from_table){
         fprintf(stderr,"Range is the wrong way around\n");
         config.fail=true;
         return config;
     }
+    config.from_table=from_table;
+    config.to_table=to_table;
     if (dat_filename) 
         config.converter=ucnv_openPackage(
             dat_filename,
@@ -275,20 +276,20 @@ typedef struct {
     int32_t length_utf32;
 } make_strings_lengths;
 make_strings_lengths make_strings(
-    const Config * config_ptr,
+    const Config config,
     inbuf_type * inbuf,
     UChar* str_utf16_ptr,
     UChar32 * str_utf32_ptr
 ){
     make_strings_lengths lengths;
-    ucnv_reset(config_ptr->converter);
+    ucnv_reset(config.converter);
     err=U_ZERO_ERROR;
     lengths.length_utf16 = ucnv_toUChars (
-        config_ptr->converter,
+        config.converter,
         str_utf16_ptr,
         15,
         inbuf->buf,
-        inbuf->index+(config_ptr->wide?2:1),
+        inbuf->index+(config.wide?2:1),
         &err
     );
     if (U_SUCCESS(err)) u_strToUTF32(
@@ -301,8 +302,7 @@ make_strings_lengths make_strings(
     );
     return lengths;
 }
-void print_fonttest(const Config * config_ptr, inbuf_type * inbuf){
-    const Config config = *config_ptr;
+void print_fonttest(const Config config, inbuf_type * inbuf){
 #define format for(bool _once=1; _once && !config.no_format_bool; _once=0)
 
     for (int table=config.from_table; table <= config.to_table; table++){
@@ -328,7 +328,7 @@ void print_fonttest(const Config * config_ptr, inbuf_type * inbuf){
                 UChar* str_utf16_ptr=str_utf16+2;
                 UChar32 str_utf32[9];
                 make_strings_lengths lengths = make_strings(
-                    &config,
+                    config,
                     inbuf,
                     str_utf16_ptr,
                     str_utf32
@@ -412,7 +412,6 @@ void print_fonttest(const Config * config_ptr, inbuf_type * inbuf){
 }
 
 int main(int argc, char * argv[]){
-
     inbuf_type * inbuf=malloc(8*sizeof(char)+sizeof(size_t)*3);
     *inbuf=(inbuf_type){
         .capacity=8,
@@ -424,7 +423,7 @@ int main(int argc, char * argv[]){
 
     if (config.fail) return_code=1;
     else if (!config.help){
-        print_fonttest(&config, inbuf);
+        print_fonttest(config, inbuf);
         ucnv_close(config.converter);
     }
     free(inbuf);

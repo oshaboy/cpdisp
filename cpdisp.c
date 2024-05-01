@@ -1,16 +1,30 @@
+#include <unicode/ucnv.h>
+#include <unicode/uchar.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <getopt.h>
+#include <string.h>
+#include <ctype.h>
+#include <iconv.h>
+#include <errno.h>
+#include <locale.h>
+#include <uchar.h>
 static const char helptext[] = "\n\
 Generate nice looking charts of character encodings within the terminal.\n\
 \n\
 Usage:\n\
-    -h : print this help.\n\
-    -w : print 2 byte table.\n\
+    -h --help : print this help.\n\
+    -w --wide: print 2 byte table.\n\
     -d [filename] : load custom icu data file.\n\
     -i : require user input between pages (only if -w is enabled).\n\
-    -r [from]:[to] : display only pages associated with this range of bytes.\n\
-    -n : no format.\n\
-    -N : no format and print control character raw.\n\
+    -r --range [from]:[to] : display only pages associated with this range of bytes.\n\
+    -n --no-format : no format.\n\
+    -N --raw : no format and print control character raw.\n\
     -x [byte]:[byte]:[byte]... : prefix in hex.\n\
     -c : print hex code and name of control characters and whitespace characters.\n\
+    --iconv : use iconv backend.\n\
+    --locale : use locale instead.\n\
 \n\
 Legend:\n\
     Blue: Control Character\n\
@@ -19,16 +33,6 @@ Legend:\n\
     Purple/Dark Magenta: Private Use Character\n\
     Dark Yellow: Something I didn't expect\n\
 \n";
-
-#include <unicode/ucnv.h>
-#include <unicode/uchar.h>
-#include <unicode/ustring.h>
-#include <stdio.h>
-#include <stdbool.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <ctype.h>
 
 static UErrorCode err=U_ZERO_ERROR , idc=U_ZERO_ERROR;
 
@@ -42,9 +46,16 @@ static const int attribute_default_background=49;
 static const int attribute_bright_blue_background = 104;
 
 
-const UChar32 * find_predicate_in_string(const UChar32 * str, UBool (*predicate)(UChar32), size_t length ){
-    for (size_t i=0; i<length; i++)
-        if (predicate(str[i])) return &str[i];
+static UBool u_isundefined(UChar32 c) {return !u_isdefined(c);}
+const UChar * find_predicate_in_string(const UChar * str, UBool (*predicate)(UChar32), size_t length ){
+    if (length==0) return NULL;
+    UChar32 c;
+    int i=0;
+    do {
+        int ibak=i;
+        U16_NEXT(str, i, length, c);
+        if (predicate(c)) return &str[ibak];
+    } while(i<length);
     return NULL;
 }
 
@@ -91,7 +102,7 @@ static void attrPrintCodepointAsHex(int attribute, const UChar32 codepoint){
     if (codepoint < 0x100){
         attrPrintRaw(attribute, (unsigned char)codepoint);
     } else {
-        int32_t name_length = u_charName(
+        size_t name_length = u_charName(
             codepoint,
             U_UNICODE_CHAR_NAME,
             NULL,
@@ -120,16 +131,23 @@ static void attrPrintCodepointAsHex(int attribute, const UChar32 codepoint){
     
 
 }
-static const char * optstring = "wNhnd:x:r:i2c";
+
 
 typedef struct {
     size_t capacity;
     size_t index;
     char buf[];
 } inbuf_type;
+typedef enum {
+    ICU=0,
+    ICONV,
+    LOCALE,
+    BACKEND_END
+} Backend;
 typedef struct {
-    UConverter * converter;
+    void * converter;
     uint8_t from_table, to_table;
+    Backend backend : 3;
     bool interactive : 1;
     bool no_format_bool : 1;
     bool control_codes_raw : 1;
@@ -138,7 +156,6 @@ typedef struct {
     bool help : 1;
     bool verbose_control_codes_and_whitespace : 1;
 } Config;
-
 
 
 Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
@@ -154,7 +171,21 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
     int opt;
     char * dat_filename=NULL;
     int from_table=0, to_table=255;
-    while ((opt=getopt(argc, argv, optstring))!=-1){
+    static int backend;
+    backend=ICU;
+    static const char optstring[] = "wNhnd:x:r:i2c";
+    static const struct option longopts[] = {
+        {"help", 0, NULL, 'h'},
+        {"wide", 0, NULL, 'w'},
+        {"range", 1, NULL, 'r'},
+        {"no-format", 0, NULL, 'n'},
+        {"raw", 0, NULL, 'N'},
+        {"iconv", 0, &backend, ICONV},
+        {"locale", 0, &backend, LOCALE},
+        {"icu", 0, &backend, ICU},
+        {0}
+    };
+    while ((opt=getopt_long(argc, argv, optstring,longopts,NULL))!=-1){
         switch (opt){
             case 'r':{
             if (isdigit(*optarg))
@@ -216,8 +247,11 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
             fprintf(stderr,"Unknown Option %c\n",opt);
             config.fail=true;
             return config;
+
+            case '\0':
         }
     }
+    config.backend=backend;
     if (argc < optind+1){
         fprintf(stderr,"No codepage given\n");
         config.fail=true;
@@ -241,67 +275,63 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
     }
     config.from_table=from_table;
     config.to_table=to_table;
-    if (dat_filename) 
-        config.converter=ucnv_openPackage(
-            dat_filename,
-            argv[optind],
-            &err
-        );
-    else
-        config.converter=ucnv_open(
-            argv[optind],
-            &err
-        );
-    
+    switch (backend){
+        case ICU:
+            if (dat_filename) 
+                config.converter=ucnv_openPackage(
+                    dat_filename,
+                    argv[optind],
+                    &err
+                );
+            else
+                config.converter=ucnv_open(
+                    argv[optind],
+                    &err
+                );
+            if (U_SUCCESS(err)) ucnv_setToUCallBack(
+                config.converter,
+                UCNV_TO_U_CALLBACK_STOP,
+                NULL,
+                NULL,
+                NULL,
+                &idc
+            );
+        break;
+        case ICONV: {
+            /* Silly endianess hack */
+            union {
+                char is_little_endian:8;
+                UChar32 a;
+            } e={.a=1};
+            config.converter=iconv_open(
+                e.is_little_endian?"UTF-16LE":"UTF-16BE",
+                argv[optind]
+            );
+            if (config.converter==(void *)-1)
+                err=1;
+            
+        } break;
+        case LOCALE:
+        if (setlocale(LC_CTYPE,argv[optind])==NULL) {
+            fprintf(stderr,"No such locale %s\n", argv[optind]);
 
-    
+            config.fail=1;
+            return config;
+        }
+        
+        break;
+    }
+
     if (U_FAILURE(err)){
         fprintf(stderr,"No such codepage %s\n", argv[optind]);
         config.fail=true;
         return config;
     }
-    ucnv_setToUCallBack(
-        config.converter,
-        UCNV_TO_U_CALLBACK_STOP,
-        NULL,
-        NULL,
-        NULL,
-        &idc
-    );
+
+
     return config;
 }
 
-typedef struct {
-    int32_t length_utf16;
-    int32_t length_utf32;
-} make_strings_lengths;
-make_strings_lengths make_strings(
-    const Config config,
-    inbuf_type * inbuf,
-    UChar* str_utf16_ptr,
-    UChar32 * str_utf32_ptr
-){
-    make_strings_lengths lengths;
-    ucnv_reset(config.converter);
-    err=U_ZERO_ERROR;
-    lengths.length_utf16 = ucnv_toUChars (
-        config.converter,
-        str_utf16_ptr,
-        15,
-        inbuf->buf,
-        inbuf->index+(config.wide?2:1),
-        &err
-    );
-    if (U_SUCCESS(err)) u_strToUTF32(
-        str_utf32_ptr,
-        9,
-        &lengths.length_utf32,
-        str_utf16_ptr,
-        lengths.length_utf16,
-        &idc
-    );
-    return lengths;
-}
 void print_fonttest(const Config config, inbuf_type * inbuf){
 #define format for(bool _once=1; _once && !config.no_format_bool; _once=0)
 
@@ -324,32 +354,104 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                 memcpy(&inbuf->buf[inbuf->index],inbyte,(config.wide?3:2));
                 }
 
-                UChar str_utf16[17];
+                UChar str_utf16[17]={0};
                 UChar* str_utf16_ptr=str_utf16+2;
-                UChar32 str_utf32[9];
-                make_strings_lengths lengths = make_strings(
-                    config,
-                    inbuf,
-                    str_utf16_ptr,
-                    str_utf32
-                );
-                
+                size_t length_utf16;
+                switch(config.backend){
+                    case ICONV: {
+                        size_t inbytes_left=inbuf->index+(config.wide?2:1);
+                        size_t outbytes_left=15*sizeof(UChar);
+                        //outbytes_left=inbytes_left=0;
+                        char * inbuf_ptr=inbuf->buf;
+                        UChar* str_utf16_ptr_bak=str_utf16_ptr;
+
+                        size_t result=iconv(
+                            config.converter,
+                            &inbuf_ptr,
+                            &inbytes_left,
+                            (char**)&str_utf16_ptr_bak,
+                            &outbytes_left
+                        );
+                        length_utf16=15-outbytes_left/sizeof(UChar);
+
+                        if(result == (size_t) -1 ){
+                            if (errno == EINVAL) err=U_TRUNCATED_CHAR_FOUND;
+                            else if (errno == EILSEQ) err=U_ILLEGAL_CHAR_FOUND;
+                            else err=U_STANDARD_ERROR_LIMIT;
+                        }
+                            else err=U_ZERO_ERROR;
+                    }
+                    break;
+
+                    case ICU:
+                        err=U_ZERO_ERROR;
+                        length_utf16=ucnv_toUChars (
+                            config.converter,
+                            str_utf16_ptr,
+                            15,
+                            inbuf->buf,
+                            inbuf->index+(config.wide?2:1),
+                            &err
+                        );
+                    break;
+                    case LOCALE:
+                    {
+                        size_t bytes_converted=0;
+                        length_utf16=0;
+                        //UChar* str_utf16_ptr_bak=str_utf16_ptr;
+                        mbstate_t mbstate={0};
+                        bool done=false;
+                        err=U_ZERO_ERROR;
+                        while (!done && bytes_converted<inbuf->index+(config.wide?2:1)){
+                            size_t result=mbrtoc16(
+                                &str_utf16_ptr[length_utf16],
+                                &inbuf->buf[bytes_converted],
+                                inbuf->index+(config.wide?2:1)-bytes_converted,
+                                &mbstate
+                            );
+                            switch (result){
+                                case -3:
+                                    length_utf16++;
+                                break;
+                                case -2:
+                                    err=U_TRUNCATED_CHAR_FOUND;
+                                    done=true;
+                                break;
+                                case -1:
+                                    err=U_ILLEGAL_CHAR_FOUND;
+                                    done=true;
+                                break;
+                                case 0:
+                                    result=1;
+                                default:
+                                    length_utf16++;
+                                    bytes_converted+=result;
+                                break;
+
+
+                            }
+                        }
+                        }
+                    break;
+                    default:
+                        fprintf(stderr, "Backend not compiled into the binary\n");
+                }
                 format printf("\e8\e[%dB\e[%dC",y+1,x*2+2);
                 if (err==U_INVALID_CHAR_FOUND ||
                     err==U_ILLEGAL_CHAR_FOUND ||
                     err==U_ILLEGAL_ESCAPE_SEQUENCE ||
                     err==U_UNSUPPORTED_ESCAPE_SEQUENCE || 
-                    !u_isdefined(*str_utf32)) 
+                    find_predicate_in_string(str_utf16_ptr,u_isundefined,length_utf16)) 
                     format attrPrintSpace(attribute_red_background);
                 else if (err==U_TRUNCATED_CHAR_FOUND)
                     format attrPrintSpace(attribute_green_background);
                 else if (U_FAILURE(err) ) 
                     format attrPrintMessage(attribute_yellow_background,u_errorName(err));
                 else {
-                    const UChar32 *tmp;
+                    const UChar *tmp;
                     if(
                         !config.control_codes_raw && 
-                        (tmp=find_predicate_in_string(str_utf32,u_iscntrl,lengths.length_utf32))
+                        (tmp=find_predicate_in_string(str_utf16_ptr,u_iscntrl,length_utf16))
                     ){
                         if (config.verbose_control_codes_and_whitespace)
                             format attrPrintCodepointAsHex(attribute_bright_blue_background, *tmp);
@@ -359,29 +461,29 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                     else if(
                         !config.control_codes_raw && 
                         config.verbose_control_codes_and_whitespace && 
-                        (tmp=find_predicate_in_string(str_utf32, u_isUWhiteSpace, lengths.length_utf32)) && 
+                        (tmp=find_predicate_in_string(str_utf16_ptr, u_isUWhiteSpace, length_utf16)) && 
                         (*tmp != ' ')
                     )
                         format attrPrintCodepointAsHex(attribute_light_gray_background, *tmp);
                     else {
                         char out_buf_utf8[33];
-                            
-                        format if (u_getCombiningClass(*str_utf32) > 0){
+                        UChar32 c;
+                        U16_GET(str_utf16_ptr, 0,0,length_utf16, c);
+                        format if (u_getCombiningClass(c) > 0){
                             *--str_utf16_ptr=u'◌';
-                            lengths.length_utf16++;
+                            length_utf16++;
                         }
                         u_strToUTF8(
                             out_buf_utf8,
                             33, 
                             NULL,
                             str_utf16_ptr,
-                            lengths.length_utf16, 
+                            length_utf16, 
                             &idc
                         );
                         
                         if (!config.no_format_bool) {
-                            UBool isPUA=(find_predicate_in_string(str_utf32,u_isPUA, lengths.length_utf32)!=NULL);
-                            const UCharDirection direction = u_charDirection(*str_utf32);
+                            UBool isPUA=(find_predicate_in_string(str_utf16_ptr,u_isPUA, length_utf16)!=NULL);
                             attrPrint(isPUA?attribute_magenta_background:attribute_default_background, out_buf_utf8);
                         }
                         else 
@@ -390,7 +492,6 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                     }
                 }
                 
-
             }
         }
 
@@ -424,7 +525,17 @@ int main(int argc, char * argv[]){
     if (config.fail) return_code=1;
     else if (!config.help){
         print_fonttest(config, inbuf);
-        ucnv_close(config.converter);
+        switch (config.backend){
+            #ifdef ENABLE_ICONV
+            case ICONV: 
+                iconv_close(config.converter);
+            break;
+            #endif
+            case ICU:
+                ucnv_close(config.converter);
+            break;
+                
+        }
     }
     free(inbuf);
     return return_code;

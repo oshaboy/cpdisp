@@ -6,10 +6,17 @@
 #include <getopt.h>
 #include <string.h>
 #include <ctype.h>
+#ifdef ENABLE_ICONV
 #include <iconv.h>
 #include <errno.h>
+#endif
 #include <locale.h>
 #include <uchar.h>
+#ifdef ENABLE_GCONV
+#include <gconv.h>
+#include <dlfcn.h>
+#endif
+
 static const char helptext[] = "\n\
 Generate nice looking charts of character encodings within the terminal.\n\
 \n\
@@ -22,9 +29,11 @@ Usage:\n\
     -n --no-format : no format.\n\
     -N --raw : no format and print control character raw.\n\
     -x [byte]:[byte]:[byte]... : prefix in hex.\n\
-    -c : print hex code and name of control characters and whitespace characters.\n\
-    --iconv : use iconv backend.\n\
-    --locale : use locale instead.\n\
+    -c : print hex code and name of control characters and whitespace characters.\n"
+#ifdef ENABLE_ICONV
+"    --iconv : use iconv backend.\n"
+#endif 
+"    --locale : use locale instead.\n\
 \n\
 Legend:\n\
     Blue: Control Character\n\
@@ -33,8 +42,8 @@ Legend:\n\
     Purple/Dark Magenta: Private Use Character\n\
     Dark Yellow: Something I didn't expect\n\
 \n";
-
-static UErrorCode err=U_ZERO_ERROR , idc=U_ZERO_ERROR;
+#include <threads.h>
+thread_local static UErrorCode err=U_ZERO_ERROR , idc=U_ZERO_ERROR;
 
 static const int attribute_red_background = 41;
 static const int attribute_green_background=42;
@@ -140,10 +149,23 @@ typedef struct {
 } inbuf_type;
 typedef enum {
     ICU=0,
+    #ifdef ENABLE_ICONV
     ICONV,
+    #endif
+    #ifdef ENABLE_GCONV
+    GCONV,
+    #endif
     LOCALE,
     BACKEND_END
 } Backend;
+#ifdef ENABLE_GCONV
+typedef struct {
+    void * shared_object;
+    __gconv_fct gconv;
+    __gconv_end_fct gconv_end;
+    struct __gconv_step step;
+} gconv_nonsense;
+#endif
 typedef struct {
     void * converter;
     uint8_t from_table, to_table;
@@ -180,7 +202,10 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
         {"range", 1, NULL, 'r'},
         {"no-format", 0, NULL, 'n'},
         {"raw", 0, NULL, 'N'},
+        #ifdef ENABLE_ICONV
         {"iconv", 0, &backend, ICONV},
+        #endif 
+        //{"gconv", 0, &backend, GCONV},
         {"locale", 0, &backend, LOCALE},
         {"icu", 0, &backend, ICU},
         {0}
@@ -297,6 +322,7 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
                 &idc
             );
         break;
+        #ifdef ENABLE_ICONV
         case ICONV: {
             /* Silly endianess hack */
             union {
@@ -311,6 +337,8 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
                 err=1;
             
         } break;
+        #endif 
+
         case LOCALE:
         if (setlocale(LC_CTYPE,argv[optind])==NULL) {
             fprintf(stderr,"No such locale %s\n", argv[optind]);
@@ -318,8 +346,35 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
             config.fail=1;
             return config;
         }
-        
+        #ifdef ENABLE_GCONV
+        case GCONV:{
+            void * shared_object=dlopen(argv[optind],RTLD_NOW);
+            if (!shared_object) {
+                fprintf(stderr,"dlopen failed %s\n", argv[optind]);
+                config.fail=1;
+                return config;
+            }
+            __gconv_init_fct gconv_init=dlsym(shared_object,"gconv_init");
+            __gconv_fct gconv_gconv=dlsym(shared_object,"gconv");
+            __gconv_end_fct gconv_end=dlsym(shared_object,"gconv_end");
+            if (!gconv_gconv || !gconv_init || !gconv_end) {
+                fprintf(stderr,"Shared object isn't a gconv library %s\n", argv[optind]);
+                dlclose(shared_object);
+                config.fail=1;
+                return config;
+            }
+            gconv_nonsense * gconv = malloc(sizeof(gconv_nonsense));
+            *gconv=(gconv_nonsense){
+                .shared_object=shared_object,
+                .gconv=gconv_gconv,
+                .gconv_end=gconv_end
+            };
+            gconv_init(&gconv->step);
+            config.converter=gconv;
+
+        }
         break;
+        #endif
     }
 
     if (U_FAILURE(err)){
@@ -358,10 +413,11 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                 UChar* str_utf16_ptr=str_utf16+2;
                 size_t length_utf16;
                 switch(config.backend){
+
+                    #ifdef ENABLE_ICONV
                     case ICONV: {
                         size_t inbytes_left=inbuf->index+(config.wide?2:1);
                         size_t outbytes_left=15*sizeof(UChar);
-                        //outbytes_left=inbytes_left=0;
                         char * inbuf_ptr=inbuf->buf;
                         UChar* str_utf16_ptr_bak=str_utf16_ptr;
 
@@ -382,6 +438,7 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                             else err=U_ZERO_ERROR;
                     }
                     break;
+                    #endif
 
                     case ICU:
                         err=U_ZERO_ERROR;
@@ -433,6 +490,28 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                         }
                         }
                     break;
+                    #ifdef ENABLE_GCONV
+                    case GCONV: {
+                        struct __gconv_step_data step_data={
+                            .__outbuf=str_utf16_ptr,
+                            .__outbufend=str_utf16_ptr+15,
+
+                            
+                        };
+                        gconv_nonsense * gconv=config.converter;
+                        size_t inbytes_left=inbuf->index+(config.wide?2:1);
+                        char * inbuf_ptr=inbuf->buf;
+                        size_t written;
+                        /*gconv->gconv(
+                            &gconv->step,
+                            &step_data,
+                            &inbuf_ptr,
+                            inbuf_ptr+inbuf->index+(config.wide?2:1),
+                            &written,
+                            0,0
+                        );*/
+                    } break;
+                    #endif
                     default:
                         fprintf(stderr, "Backend not compiled into the binary\n");
                 }
@@ -534,6 +613,15 @@ int main(int argc, char * argv[]){
             case ICU:
                 ucnv_close(config.converter);
             break;
+            #ifdef ENABLE_GCONV
+            case GCONV:{
+                gconv_nonsense * gconv = config.converter;
+                gconv->gconv_end(&gconv->step);
+                dlclose(gconv->shared_object);
+                free(gconv);
+
+            } break;
+            #endif
                 
         }
     }

@@ -6,16 +6,23 @@
 #include <getopt.h>
 #include <string.h>
 #include <ctype.h>
+#include <locale.h>
+#include <uchar.h>
 #ifdef ENABLE_ICONV
 #include <iconv.h>
 #include <errno.h>
 #endif
-#include <locale.h>
-#include <uchar.h>
+#ifdef ENABLE_LIBICONV
+#include <errno.h>
+void * libiconv_open (const char* tocode, const char* fromcode);
+size_t libiconv (void * cd,  char* * inbuf, size_t *inbytesleft, char* * outbuf, size_t *outbytesleft);
+int libiconv_close (void * cd);
+#endif
 #ifdef ENABLE_GCONV
 #include <gconv.h>
 #include <dlfcn.h>
 #endif
+#include "mapconv/mapping_file_parser.h"
 
 static const char helptext[] = "\n\
 Generate nice looking charts of character encodings within the terminal.\n\
@@ -33,6 +40,9 @@ Usage:\n\
 #ifdef ENABLE_ICONV
 "    --iconv : use iconv backend.\n"
 #endif 
+#ifdef ENABLE_LIBICONV
+"    --libiconv : use libiconv backend.\n"
+#endif
 "    --locale : use locale instead.\n\
 \n\
 Legend:\n\
@@ -155,7 +165,11 @@ typedef enum {
     #ifdef ENABLE_GCONV
     GCONV,
     #endif
+    #ifdef ENABLE_LIBICONV
+    LIBICONV,
+    #endif
     LOCALE,
+    MAPPING_FILE,
     BACKEND_END
 } Backend;
 #ifdef ENABLE_GCONV
@@ -205,6 +219,10 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
         #ifdef ENABLE_ICONV
         {"iconv", 0, &backend, ICONV},
         #endif 
+        #ifdef ENABLE_LIBICONV
+        {"libiconv", 0, &backend, LIBICONV},
+        #endif 
+        {"mapfile", 0, &backend, MAPPING_FILE},
         //{"gconv", 0, &backend, GCONV},
         {"locale", 0, &backend, LOCALE},
         {"icu", 0, &backend, ICU},
@@ -300,6 +318,7 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
     }
     config.from_table=from_table;
     config.to_table=to_table;
+    const char * errmsg;
     switch (backend){
         case ICU:
             if (dat_filename) 
@@ -320,7 +339,11 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
                 NULL,
                 NULL,
                 &idc
-            );
+            ); else {
+                config.fail=true;
+                errmsg="No such codepage %s\n";
+                goto end;
+            }
         break;
         #ifdef ENABLE_ICONV
         case ICONV: {
@@ -333,35 +356,37 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
                 e.is_little_endian?"UTF-16LE":"UTF-16BE",
                 argv[optind]
             );
-            if (config.converter==(void *)-1)
-                err=1;
+            if (config.converter==(void *)-1){
+                config.fail=true;
+                errmsg="No such codepage %s\n";
+                goto end;
+            }
             
         } break;
         #endif 
 
         case LOCALE:
         if (setlocale(LC_CTYPE,argv[optind])==NULL) {
-            fprintf(stderr,"No such locale %s\n", argv[optind]);
-
-            config.fail=1;
-            return config;
+            errmsg="No such locale %s\n";
+            config.fail=true;
+            goto end;
         }
         #ifdef ENABLE_GCONV
         case GCONV:{
             void * shared_object=dlopen(argv[optind],RTLD_NOW);
             if (!shared_object) {
-                fprintf(stderr,"dlopen failed %s\n", argv[optind]);
-                config.fail=1;
-                return config;
+                errmsg="dlopen failed %s\n";
+                config.fail=true;
+                goto end;
             }
             __gconv_init_fct gconv_init=dlsym(shared_object,"gconv_init");
             __gconv_fct gconv_gconv=dlsym(shared_object,"gconv");
             __gconv_end_fct gconv_end=dlsym(shared_object,"gconv_end");
             if (!gconv_gconv || !gconv_init || !gconv_end) {
-                fprintf(stderr,"Shared object isn't a gconv library %s\n", argv[optind]);
+                errmsg="Shared object isn't a gconv library %s\n";
                 dlclose(shared_object);
                 config.fail=1;
-                return config;
+                goto end;
             }
             gconv_nonsense * gconv = malloc(sizeof(gconv_nonsense));
             *gconv=(gconv_nonsense){
@@ -375,13 +400,48 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
         }
         break;
         #endif
-    }
+        #ifdef ENABLE_LIBICONV
+        case LIBICONV: {
+            /* Silly endianess hack */
+            union {
+                char is_little_endian:8;
+                UChar32 a;
+            } e={.a=1};
+            config.converter=libiconv_open(
+                e.is_little_endian?"UTF-16LE":"UTF-16BE",
+                argv[optind]
+            );
+            if (config.converter==(void *)-1){
+                config.fail=true;
+                errmsg="No such codepage %s\n";
+                goto end;
+            }
+            
+        } break;
+        #endif
+        case MAPPING_FILE:
+            config.converter=malloc(sizeof(MappingTable));
+            FILE * mapping_file=fopen(argv[optind], "rt");
+            if (!mapping_file) {
+                errmsg="No such file %s\n";
+                config.fail=true;
+                goto end;
+            }
+                
+            *(MappingTable *)config.converter=parse_mapping_file(mapping_file);
+            fclose(mapping_file);
+            if (!((MappingTable *)config.converter)->table){
+                config.fail=true;
+                errmsg="Invalid mapping file %s\n";
+                goto end;
+            }
 
-    if (U_FAILURE(err)){
-        fprintf(stderr,"No such codepage %s\n", argv[optind]);
-        config.fail=true;
-        return config;
+        break;
     }
+end:
+    if (config.fail)
+        fprintf(stderr,errmsg, argv[optind]);
+    
 
 
     return config;
@@ -439,7 +499,31 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                     }
                     break;
                     #endif
+                    #ifdef ENABLE_LIBICONV
+                    case LIBICONV: {
+                        size_t inbytes_left=inbuf->index+(config.wide?2:1);
+                        size_t outbytes_left=15*sizeof(UChar);
+                        char * inbuf_ptr=inbuf->buf;
+                        UChar* str_utf16_ptr_bak=str_utf16_ptr;
 
+                        size_t result=libiconv(
+                            config.converter,
+                            &inbuf_ptr,
+                            &inbytes_left,
+                            (char**)&str_utf16_ptr_bak,
+                            &outbytes_left
+                        );
+                        length_utf16=15-outbytes_left/sizeof(UChar);
+
+                        if(result == (size_t) -1 ){
+                            if (errno == EINVAL) err=U_TRUNCATED_CHAR_FOUND;
+                            else if (errno == EILSEQ) err=U_ILLEGAL_CHAR_FOUND;
+                            else err=U_STANDARD_ERROR_LIMIT;
+                        }
+                            else err=U_ZERO_ERROR;
+                    }
+                    break;
+                    #endif
                     case ICU:
                         err=U_ZERO_ERROR;
                         length_utf16=ucnv_toUChars (
@@ -512,6 +596,43 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                         );*/
                     } break;
                     #endif
+                    case MAPPING_FILE:{
+                        char out_buf_utf8[31];
+                        size_t outlen;
+                        convert_result r=convert(
+                            *(MappingTable*)config.converter,
+                            inbuf->buf,
+                            inbuf->index+(config.wide?2:1),
+                            out_buf_utf8,
+                            31,
+                            &outlen
+                        );
+                        if (r==CONVERSION_OK){
+                            int32_t length_utf16_i;
+                            err=U_ZERO_ERROR;
+                            u_strFromUTF8(
+                                str_utf16_ptr,
+                                15,
+                                &length_utf16_i,
+                                out_buf_utf8,
+                                outlen,
+                                &err
+                            );
+                            length_utf16=length_utf16_i;
+                        } else {
+                            static const UErrorCode error_conversion[]={
+                                [CONVERSION_OK]=U_ZERO_ERROR,
+                                [INVALID_CHARACTER]=U_ILLEGAL_CHAR_FOUND,
+                                [INCOMPLETE_CHARACTER]=U_TRUNCATED_CHAR_FOUND,
+                                [BUFFER_NOT_BIG_ENOUGH]=U_STANDARD_ERROR_LIMIT
+                            };
+                            err=error_conversion[r];
+                            length_utf16=0;
+                        }
+                        
+
+                    }
+                    break;
                     default:
                         fprintf(stderr, "Backend not compiled into the binary\n");
                 }
@@ -610,6 +731,11 @@ int main(int argc, char * argv[]){
                 iconv_close(config.converter);
             break;
             #endif
+            #ifdef ENABLE_LIBICONV
+            case LIBICONV: 
+                libiconv_close(config.converter);
+            break;
+            #endif
             case ICU:
                 ucnv_close(config.converter);
             break;
@@ -622,6 +748,7 @@ int main(int argc, char * argv[]){
 
             } break;
             #endif
+
                 
         }
     }

@@ -22,7 +22,9 @@ int libiconv_close (void * cd);
 #include <gconv.h>
 #include <dlfcn.h>
 #endif
+#ifdef ENABLE_MAPFILE
 #include "mapconv/mapping_file_parser.h"
+#endif 
 
 static const char helptext[] = "\n\
 Generate nice looking charts of character encodings within the terminal.\n\
@@ -95,9 +97,12 @@ static bool iswide(UChar * str, size_t len){
     UChar32 c;
     while(i<len){
         U16_NEXT(str, i, len, c);
-        if (u_charType(c)!=U_NON_SPACING_MARK){
+        if (u_charType(c)!=U_NON_SPACING_MARK || c==0xfe0f){
 			int ea_width=u_getIntPropertyValue(c,UCHAR_EAST_ASIAN_WIDTH);
-			if (width == 1 || ea_width==U_EA_FULLWIDTH || ea_width == U_EA_WIDE) return true;
+			if (
+                width == 1 ||
+                ea_width==U_EA_FULLWIDTH ||
+                ea_width == U_EA_WIDE) return true;
 			else width+=1;
         }
 
@@ -238,7 +243,9 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
         #ifdef ENABLE_LIBICONV
         {"libiconv", 0, &backend, LIBICONV},
         #endif 
+        #ifdef ENABLE_MAPFILE
         {"mapfile", 0, &backend, MAPPING_FILE},
+        #endif
         //{"gconv", 0, &backend, GCONV},
         {"locale", 0, &backend, LOCALE},
         {"icu", 0, &backend, ICU},
@@ -435,6 +442,7 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
             
         } break;
         #endif
+        #ifdef ENABLE_MAPFILE
         case MAPPING_FILE:
             config.converter=malloc(sizeof(MappingTable));
             FILE * mapping_file=fopen(argv[optind], "rt");
@@ -453,6 +461,7 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
             }
 
         break;
+        #endif
     }
 end:
     if (config.fail)
@@ -613,6 +622,7 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                         );*/
                     } break;
                     #endif
+                    #ifdef ENABLE_MAPFILE
                     case MAPPING_FILE:{
                         char out_buf_utf8[31];
                         size_t outlen;
@@ -649,6 +659,7 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                         
 
                     }
+                    #endif 
                     break;
                     default:
                         fprintf(stderr, "Backend not compiled into the binary\n");

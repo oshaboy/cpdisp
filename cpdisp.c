@@ -83,12 +83,28 @@ static UBool u_isPUA(UChar32 c){
 }
 
 static void attrPrint(int attribute, char * str){
-    printf("\e[%dm\xe2\x80\xad%s\xe2\x80\xac ", attribute,str);
+    printf("\e[%dm\xe2\x80\xad%s\xe2\x80\xac", attribute,str);
 }
 static void attrPrintSpace(int attribute){
-    attrPrint(attribute, " ");
+    attrPrint(attribute, "  ");
 }
 
+static bool iswide(UChar * str, size_t len){
+    int width=0;
+    int i=0;
+    UChar32 c;
+    while(i<len){
+        U16_NEXT(str, i, len, c);
+        if (u_charType(c)!=U_NON_SPACING_MARK){
+			int ea_width=u_getIntPropertyValue(c,UCHAR_EAST_ASIAN_WIDTH);
+			if (width == 1 || ea_width==U_EA_FULLWIDTH || ea_width == U_EA_WIDE) return true;
+			else width+=1;
+        }
+
+    }
+    return false;
+
+}
 static size_t message_index=0;
 static char * messages[256];
 static void attrPrintMessage(int attribute, const char * message){
@@ -453,10 +469,11 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
     for (int table=config.from_table; table <= config.to_table; table++){
         format printf("Table %d:\n",table);
 
-        format printf("  \e[7m0 1 2 3 4 5 6 7 8 9 a b c d e f \n\n"
-            "0\n1\n2\n3\n4\n5\n6\n7\n8\n9\na\nb\nc\nd\ne\nf\n"
-            "\e[17A\e[27m\e7");
+        format printf("  \e[7m0 1 2 3 4 5 6 7 8 9 a b c d e f \e[27m\n\n"
+            /*"0\n1\n2\n3\n4\n5\n6\n7\n8\n9\na\nb\nc\nd\ne\nf\n"
+            "\e[17A\e[27m\e7"*/);
         for (int y=0; y<16; y++){
+            printf("\e[7m%x\e[27m ", y);
             for (int x=0; x<16; x++){
                 {
                 const char buf[3]={table,y*16+x,0};
@@ -636,7 +653,7 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                     default:
                         fprintf(stderr, "Backend not compiled into the binary\n");
                 }
-                format printf("\e8\e[%dB\e[%dC",y+1,x*2+2);
+                // format printf("\e8\e[%dB\e[%dC",y+1,x*2+2);
                 if (err==U_INVALID_CHAR_FOUND ||
                     err==U_ILLEGAL_CHAR_FOUND ||
                     err==U_ILLEGAL_ESCAPE_SEQUENCE ||
@@ -669,7 +686,11 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                         char out_buf_utf8[33];
                         UChar32 c;
                         U16_GET(str_utf16_ptr, 0,0,length_utf16, c);
-                        format if (u_getCombiningClass(c) > 0){
+                        format if (
+                            u_charType(c) == U_NON_SPACING_MARK || 
+                            u_charType(c) == U_ENCLOSING_MARK ||
+                            u_charType(c) == U_COMBINING_SPACING_MARK
+                        ){
                             *--str_utf16_ptr=u'◌';
                             length_utf16++;
                         }
@@ -684,7 +705,13 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                         
                         if (!config.no_format_bool) {
                             UBool isPUA=(find_predicate_in_string(str_utf16_ptr,u_isPUA, length_utf16)!=NULL);
-                            attrPrint(isPUA?attribute_magenta_background:attribute_default_background, out_buf_utf8);
+                            attrPrint(
+                                isPUA?attribute_magenta_background:attribute_default_background,
+                                out_buf_utf8
+                            );
+                            if (!iswide(str_utf16_ptr, length_utf16))
+                                printf(" ");
+                            
                         }
                         else 
                             printf("%s", out_buf_utf8);
@@ -693,6 +720,7 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                 }
                 
             }
+            printf("\e[0m\n");
         }
 
         format printf("\e[0m\n\n");

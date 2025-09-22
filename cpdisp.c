@@ -66,7 +66,13 @@ static const int attribute_light_gray_background=47;
 static const int attribute_default_background=49;
 static const int attribute_bright_blue_background = 104;
 
-
+char * u_strToUTF8 	( 	char *  	dest,
+		int32_t  	destCapacity,
+		int32_t *  	pDestLength,
+		const UChar *  	src,
+		int32_t  	srcLength,
+		UErrorCode *  	pErrorCode 
+	);
 static UBool u_isundefined(UChar32 c) {return !u_isdefined(c);}
 const UChar * find_predicate_in_string(const UChar * str, UBool (*predicate)(UChar32), size_t length ){
     if (length==0) return NULL;
@@ -211,6 +217,7 @@ typedef struct {
     bool fail : 1;
     bool wide : 1;
     bool help : 1;
+    bool column_order : 1;
     bool verbose_control_codes_and_whitespace : 1;
 } Config;
 
@@ -230,13 +237,14 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
     int from_table=0, to_table=255;
     static int backend;
     backend=ICU;
-    static const char optstring[] = "wNhnd:x:r:i2c";
+    static const char optstring[] = "wNhnd:x:r:i2cz";
     static const struct option longopts[] = {
         {"help", 0, NULL, 'h'},
         {"wide", 0, NULL, 'w'},
         {"range", 1, NULL, 'r'},
         {"no-format", 0, NULL, 'n'},
         {"raw", 0, NULL, 'N'},
+        {"column-order", 0, NULL, 'z'},
         #ifdef ENABLE_ICONV
         {"iconv", 0, &backend, ICONV},
         #endif 
@@ -298,7 +306,6 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
             case 'n':
             config.no_format_bool = true;
             break;
-
             case 'h':
             printf("%s",helptext);
             config.help=true;
@@ -307,7 +314,9 @@ Config CreateConfig(int argc, char * argv[], inbuf_type * inbuf){
             case 'c':
             config.verbose_control_codes_and_whitespace=true;
             break;
-
+            case 'z':
+            config.column_order = true;
+            break;
             case '?':
             default:
             fprintf(stderr,"Unknown Option %c\n",opt);
@@ -478,12 +487,12 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
     for (int table=config.from_table; table <= config.to_table; table++){
         format printf("Table %d:\n",table);
 
-        format printf("  \e[7m0 1 2 3 4 5 6 7 8 9 a b c d e f \e[27m\n\n"
-            /*"0\n1\n2\n3\n4\n5\n6\n7\n8\n9\na\nb\nc\nd\ne\nf\n"
-            "\e[17A\e[27m\e7"*/);
-        for (int y=0; y<16; y++){
-            printf("\e[7m%x\e[27m ", y);
-            for (int x=0; x<16; x++){
+        format printf("  \e[7m0 1 2 3 4 5 6 7 8 9 a b c d e f \e[27m\n\n");
+        for (int i=0; i<16; i++){
+            printf("\e[7m%x\e[27m ", i);
+            for (int j=0; j<16; j++){
+                int x=config.column_order?i:j;
+                int y=config.column_order?j:i;
                 {
                 const char buf[3]={table,y*16+x,0};
                 const char * inbyte;
@@ -565,7 +574,6 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                     {
                         size_t bytes_converted=0;
                         length_utf16=0;
-                        //UChar* str_utf16_ptr_bak=str_utf16_ptr;
                         mbstate_t mbstate={0};
                         bool done=false;
                         err=U_ZERO_ERROR;

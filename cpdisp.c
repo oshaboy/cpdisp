@@ -38,7 +38,8 @@ Usage:\n\
     -n --no-format : no format.\n\
     -N --raw : no format and print control character raw.\n\
     -x [byte]:[byte]:[byte]... : prefix in hex.\n\
-    -c : print hex code and name of control characters and whitespace characters.\n"
+    -c : print hex code and name of control characters and whitespace characters.\n\
+    -z : Column Major Order\n"
 #ifdef ENABLE_ICONV
 "    --iconv : use iconv backend.\n"
 #endif 

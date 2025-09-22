@@ -492,8 +492,14 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
         for (int i=0; i<16; i++){
             format printf("\e[7m%x\e[27m ", i);
             for (int j=0; j<16; j++){
-                int x=config.column_order?i:j;
-                int y=config.column_order?j:i;
+                int x,y;
+                if (config.no_format_bool) {
+                    x=j;
+                    y=i;
+                } else {
+                    x=config.column_order?i:j;
+                    y=config.column_order?j:i;
+                }
                 {
                 const char buf[3]={table,y*16+x,0};
                 const char * inbyte;

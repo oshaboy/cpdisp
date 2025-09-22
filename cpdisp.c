@@ -490,7 +490,7 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
 
         format printf("  \e[7m0 1 2 3 4 5 6 7 8 9 a b c d e f \e[27m\n\n");
         for (int i=0; i<16; i++){
-            printf("\e[7m%x\e[27m ", i);
+            format printf("\e[7m%x\e[27m ", i);
             for (int j=0; j<16; j++){
                 int x=config.column_order?i:j;
                 int y=config.column_order?j:i;
@@ -740,7 +740,7 @@ void print_fonttest(const Config config, inbuf_type * inbuf){
                 }
                 
             }
-            printf("\e[0m\n");
+            format printf("\e[0m\n");
         }
 
         format printf("\e[0m\n\n");
